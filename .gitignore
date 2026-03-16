@@ -1,0 +1,32 @@
+# Environment & credentials
+.env
+
+# User settings (auto-created on first run)
+settings.json
+
+# Output data (scrape results, audit logs, comparison CSVs)
+output/
+
+# Input data (real product catalogs)
+input/*
+!input/items.example.csv
+
+# Trash directories
+.Trash-*/
+
+# Reference data (cached HTML/screenshots from target sites)
+.ref/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude Code local settings
+.claude/
+
+# Gitignored config files (sensitive business config)
+scraper/stores/store_config.py
+scraper/db_schema.py
+scraper/prompts.py
+scraper/thresholds.py
