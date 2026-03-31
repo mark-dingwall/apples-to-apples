@@ -414,6 +414,7 @@ def _build_report_data(
             "selected": u.id in {a.id for a in approved},
             "diff_pct": diff_pct,
             "search_term": search_terms.get(str(u.id), ""),
+            "rrp_source": u.rrp_source,
         })
 
     return {
@@ -528,6 +529,7 @@ tbody tr:hover { background: #eff6ff; }
 .quality-good { color: var(--success); font-weight: 600; }
 .quality-ok { color: var(--warning); font-weight: 600; }
 .quality-poor { color: var(--danger); font-weight: 600; }
+.badge-override { font-size: 0.7rem; background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; border-radius: 3px; padding: 0 3px; margin-left: 4px; vertical-align: middle; cursor: default; }
 
 /* Filter input */
 .filter-row { margin-bottom: 0.75rem; }
@@ -922,7 +924,7 @@ function esc(s) { var d = document.createElement('div'); d.textContent = s; retu
       '<td>' + esc(r.name) + '</td>' +
       '<td>' + esc(r.search_term) + '</td>' +
       '<td class="text-right">' + fmt(r.our_price) + '</td>' +
-      '<td class="text-right">' + fmt(r.new_rrp) + '</td>' +
+      '<td class="text-right">' + fmt(r.new_rrp) + (r.rrp_source ? '<span class="badge-override" title="RRP overridden (' + r.rrp_source + ')">✎</span>' : '') + '</td>' +
       '<td class="text-right">' + fmt(r.old_rrp) + '</td>' +
       '<td class="text-right ' + cls(r.diff_pct) + '">' + pct(r.diff_pct) + '</td>' +
       '<td class="text-right">' + fmt(r.store_a) + '</td>' +

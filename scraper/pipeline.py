@@ -435,6 +435,8 @@ def write_audit_log(updates: list[UpdateRow], log_path: Path) -> None:
                 f.write(f"{STORE_A_NAME}: {update.store_a_price} cents\n")
                 f.write(f"{STORE_B_NAME}: {update.store_b_price} cents\n")
                 f.write(f"Quality: {update.quality}\n")
+                if update.rrp_source:
+                    f.write(f"RRP source: {update.rrp_source} (MANUAL OVERRIDE)\n")
                 f.write("-" * 40 + "\n")
 
 

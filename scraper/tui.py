@@ -65,7 +65,9 @@ def _get_column_help() -> "dict[int, HelpEntry]":
             )]),
             4: HelpEntry([HelpTip(
                 f"Calculated RRP from {STORE_A_NAME} and {STORE_B_NAME} prices. This is the new recommended "
-                "retail price that will be saved to your database."
+                "retail price that will be saved to your database. "
+                "Press S to swap the RRP between stores, or E to enter a custom value. "
+                "Yellow = manually overridden."
             )]),
             5: HelpEntry([HelpTip(
                 "How the RRP has changed. Cyan = competitors raised their prices (you "
@@ -99,7 +101,8 @@ def _get_column_help() -> "dict[int, HelpEntry]":
                 "carefully before accepting."
             )]),
             12: HelpEntry([HelpTip(
-                "Product name from whichever store set the RRP (highest price)."
+                "Product name from whichever store set the RRP. "
+                "Shows '(manual)' if you entered a custom RRP value with E."
             )]),
             13: HelpEntry([HelpTip(
                 "Shows the conversion math used to calculate competitor prices. "
@@ -125,6 +128,7 @@ class UpdateRow:
     store_b_name: str | None = None # Name of matched Store B product
     conversion_desc: str | None = None # Combined conversion description
     selected: bool = True
+    rrp_source: Literal["a", "b", "manual"] | None = None  # None = auto; "a"/"b" = swapped; "manual" = typed
 
 
 def format_price(cents: int | None) -> str:
@@ -264,9 +268,11 @@ def build_table(updates: list[UpdateRow], cursor: int, page_start: int, page_siz
             else:
                 old_diff = f"[blue]{old_diff}[/blue]"
 
-        # New RRP - color vs our price
+        # New RRP - yellow bold if manually overridden, otherwise color vs our price
         new_rrp_str = format_price(update.new_rrp)
-        if update.new_rrp > update.current_price:
+        if update.rrp_source is not None:
+            new_rrp_str = f"[yellow bold]{new_rrp_str}[/yellow bold]"
+        elif update.new_rrp > update.current_price:
             new_rrp_str = f"[cyan]{new_rrp_str}[/cyan]"
         elif update.new_rrp < update.current_price:
             new_rrp_str = f"[orange1]{new_rrp_str}[/orange1]"
@@ -314,15 +320,22 @@ def build_table(updates: list[UpdateRow], cursor: int, page_start: int, page_siz
         quality_style = get_quality_style(update.quality)
         quality = f"[{quality_style}]{update.quality[:4]}[/{quality_style}]"
 
-        # RRP Name - show name from whichever store provided the RRP (max price)
-        store_a_p = update.store_a_price or 0
-        store_b_p = update.store_b_price or 0
-        if store_a_p >= store_b_p and update.store_a_name:
+        # RRP Name - use rrp_source if set, else fall back to highest-price store
+        if update.rrp_source == "a" and update.store_a_name:
             rrp_name = update.store_a_name[:28]
-        elif update.store_b_name:
+        elif update.rrp_source == "b" and update.store_b_name:
             rrp_name = update.store_b_name[:28]
+        elif update.rrp_source == "manual":
+            rrp_name = "(manual)"
         else:
-            rrp_name = "-"
+            store_a_p = update.store_a_price or 0
+            store_b_p = update.store_b_price or 0
+            if store_a_p >= store_b_p and update.store_a_name:
+                rrp_name = update.store_a_name[:28]
+            elif update.store_b_name:
+                rrp_name = update.store_b_name[:28]
+            else:
+                rrp_name = "-"
 
         # Conv column - scroll only applies to cursor row
         row_scroll = desc_scroll if i == cursor else 0
@@ -385,6 +398,10 @@ def build_display(
     header.append(": All  ", style="dim")
     header.append("N", style="bold cyan")
     header.append(": None  ", style="dim")
+    header.append("S", style="bold cyan")
+    header.append(": Swap RRP  ", style="dim")
+    header.append("E", style="bold cyan")
+    header.append(": Edit RRP  ", style="dim")
     header.append("H", style="bold cyan")
     header.append(": Help  ", style="dim")
     header.append("←/→", style="bold cyan")
@@ -464,6 +481,10 @@ def get_key() -> str:
             return "o"
         elif key == b"h":
             return "h"
+        elif key == b"s" or key == b"S":
+            return "s"
+        elif key == b"e" or key == b"E":
+            return "e"
         return key.decode("utf-8", errors="ignore")
     else:
         import tty
@@ -508,6 +529,10 @@ def get_key() -> str:
                 return "o"
             elif ch.lower() == "h":
                 return "h"
+            elif ch.lower() == "s":
+                return "s"
+            elif ch.lower() == "e":
+                return "e"
             return ch
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
@@ -605,6 +630,27 @@ def show_approval_tui(updates: list[UpdateRow]) -> list[UpdateRow] | None:
                     auto_quals = settings.auto_approve_qualities
                     for u in updates:
                         u.selected = (u.quality in auto_quals)
+                elif key == "s":
+                    row = updates[cursor]
+                    if row.store_a_price is not None and row.store_b_price is not None:
+                        if row.rrp_source != "b":
+                            row.new_rrp = row.store_b_price
+                            row.rrp_source = "b"
+                        else:
+                            row.new_rrp = row.store_a_price
+                            row.rrp_source = "a"
+                elif key == "e":
+                    row = updates[cursor]
+                    live.stop()
+                    try:
+                        raw = input(f"  Enter new RRP for '{row.name[:40]}' ($): ").strip()
+                        if raw:
+                            dollars = float(raw.lstrip("$"))
+                            row.new_rrp = round(dollars * 100)
+                            row.rrp_source = "manual"
+                    except (ValueError, EOFError, KeyboardInterrupt):
+                        pass
+                    live.start()
                 elif key == "left":
                     desc_scroll = max(0, desc_scroll - 5)
                 elif key == "right":
