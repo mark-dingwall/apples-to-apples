@@ -45,6 +45,40 @@ class BaseStoreScraper(ABC):
             await self.page.close()
             self.page = None
 
+    async def _check_for_block_page(self) -> StoreResults | None:
+        """Check if the current page is a WAF/CDN block page.
+
+        Returns StoreResults with status='blocked' if detected, or None if normal.
+        """
+        try:
+            body_text = await self.page.text_content("body", timeout=3000)
+            if not body_text:
+                return None
+
+            body_lower = body_text.lower()
+            block_indicators = [
+                "this content is blocked",
+                "access denied",
+                "verify you are human",
+                "attention required",
+                "checking your browser",
+                "ray id",
+            ]
+
+            for indicator in block_indicators:
+                if indicator in body_lower:
+                    logger.warning(
+                        f"[{self.name}] Block page detected: '{indicator}'"
+                    )
+                    return StoreResults(
+                        status="blocked",
+                        error_message=f"Block page detected: '{indicator}'",
+                    )
+
+            return None
+        except Exception:
+            return None
+
     @abstractmethod
     def get_search_url(self, query: str) -> str:
         """Return the search URL for the given query."""
@@ -86,6 +120,11 @@ class BaseStoreScraper(ABC):
                 # Re-inject mouse tracker after navigation (DOM is replaced)
                 if self.debug_mouse:
                     await inject_mouse_tracker(self.page)
+
+                # Check for WAF/CDN block pages before waiting for results
+                block_result = await self._check_for_block_page()
+                if block_result:
+                    return block_result
 
                 has_results = await self.wait_for_results()
 
