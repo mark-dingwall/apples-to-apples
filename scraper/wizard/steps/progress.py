@@ -283,7 +283,7 @@ def run_scraper_subprocess(
 
         last_completed = 0
         start_time = time.time()
-        timeout = 1800  # 30 min
+        timeout = 3600  # 60 min
 
         while process.poll() is None:
             if time.time() - start_time > timeout:
@@ -394,7 +394,7 @@ def run_processor_subprocess(
 
         last_completed = 0
         start_time = time.time()
-        timeout = 1800  # 30 min, matches scraper timeout
+        timeout = 3600  # 60 min, matches scraper timeout
 
         while process.poll() is None:
             if time.time() - start_time > timeout:

@@ -169,7 +169,7 @@ def run_scraper(input_csv: Path, output_dir: Path, headless: bool = False) -> Pa
 
     logger.info(f"Running scraper: {' '.join(cmd)}")
 
-    timeout_seconds = 1800  # 30 min timeout
+    timeout_seconds = 3600  # 60 min timeout
     process = None
 
     try:
