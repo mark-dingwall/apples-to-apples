@@ -29,6 +29,12 @@ from scraper.db import OfferPart, execute_updates, fetch_items, verify_offer_exi
 from scraper.stores.store_config import STORE_A_NAME, STORE_B_NAME, STORE_A_COL, STORE_B_COL
 from scraper.tui import UpdateRow, show_approval_tui, show_summary
 from scraper.utils.claude_cli import call_claude_cli
+from scraper.utils.overrides import (
+    MalformedOverridesError,
+    apply_search_overrides,
+    load_search_overrides,
+    resolve_search_overrides,
+)
 from scraper.wizard.settings import SettingsManager
 
 try:
@@ -475,17 +481,46 @@ def main():
 
     # Step 2: Generate search terms
     logger.info("Generating search terms with Claude...")
-    items_for_terms = [{"id": item.id, "name": item.name} for item in items]
+    # Resolve overrides first so overridden items are excluded from the LLM batch.
+    # A present-but-malformed file prompts interactively; in non-interactive runs we abort
+    # rather than silently proceed with overrides disabled (this writes prices to the DB).
+    try:
+        loaded_overrides = load_search_overrides()
+    except MalformedOverridesError as e:
+        if args.fully_automated or not sys.stdin.isatty():
+            logger.error(
+                f"overrides.json is invalid or corrupt ({e}). "
+                "Cannot prompt in non-interactive mode. Aborting."
+            )
+            sys.exit(1)
+        print(
+            f"\noverrides.json is invalid or corrupt; no search term overrides will be "
+            f"applied.\n  ({e})"
+        )
+        if input("Continue? [Y/n]: ").strip().lower() in ("n", "no"):
+            sys.exit(0)
+        loaded_overrides = {}
+
+    overrides = resolve_search_overrides(items, overrides=loaded_overrides)
+    items_for_terms = [
+        {"id": item.id, "name": item.name}
+        for item in items
+        if item.id not in overrides
+    ]
     search_terms, failed_search_term_ids = generate_search_terms_batch(items_for_terms, batch_size=15)
     logger.info(f"Generated search terms for {len(search_terms)} items")
 
     if failed_search_term_ids:
         logger.warning(f"Failed to generate search terms for {len(failed_search_term_ids)} items: {failed_search_term_ids}")
 
+    # Merge overrides back in (term + optional manual weight).
+    override_weights: dict[int, float | None] = {}
+    apply_search_overrides(overrides, search_terms, override_weights)
+
     # Write temp CSV for scraper
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     temp_csv = output_dir / f"pipeline_input_{timestamp}.csv"
-    write_temp_csv(items, search_terms, temp_csv)
+    write_temp_csv(items, search_terms, temp_csv, weights=override_weights)
     logger.info(f"Wrote input CSV: {temp_csv}")
 
     # Step 3: Run scraper (or use existing results)
@@ -517,6 +552,10 @@ def main():
     logger.info("Building update list...")
     comparisons = parse_comparison_csv(comparison_csv)
     updates = build_updates(comparisons)
+    # Flag items whose search term was overridden (the resolved map is already in scope).
+    overridden = set(overrides)
+    for u in updates:
+        u.search_term_overridden = u.id in overridden
     logger.info(f"Found {len(updates)} items with valid competitor prices")
 
     if not updates:

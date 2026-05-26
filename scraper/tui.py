@@ -53,7 +53,9 @@ def _get_column_help() -> "dict[int, HelpEntry]":
             )]),
             1: HelpEntry([HelpTip(
                 "Product name from your database. The reverse-highlighted row shows "
-                "your cursor position. Use Up/Down arrows to navigate between items."
+                "your cursor position. Use Up/Down arrows to navigate between items. "
+                "A yellow ⌕ before the name means the supermarket search term was forced "
+                "via search_overrides.json (not LLM-generated)."
             )]),
             2: HelpEntry([HelpTip(
                 "Your current selling price. Green = cheaper than RRP (good margin). "
@@ -129,6 +131,7 @@ class UpdateRow:
     conversion_desc: str | None = None # Combined conversion description
     selected: bool = True
     rrp_source: Literal["a", "b", "manual"] | None = None  # None = auto; "a"/"b" = swapped; "manual" = typed
+    search_term_overridden: bool = False  # True = supermarket search term was forced via search_overrides.json
 
 
 def format_price(cents: int | None) -> str:
@@ -235,8 +238,11 @@ def build_table(updates: list[UpdateRow], cursor: int, page_start: int, page_siz
         # Checkbox - [X] for selected, [ ] for unselected
         checkbox = "[bold green][X][/bold green]" if update.selected else "[ ]"
 
-        # Name with cursor indicator
-        name = escape(update.name[:28])
+        # Name with cursor indicator and search-term-override marker (⌕)
+        if update.search_term_overridden:
+            name = f"[yellow]⌕[/yellow] {escape(update.name[:26])}"
+        else:
+            name = escape(update.name[:28])
         if i == cursor:
             name = f"[reverse]{name}[/reverse]"
 

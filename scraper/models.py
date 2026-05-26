@@ -19,6 +19,7 @@ class OfferPart:
     name: str
     price: int  # cents
     category_id: int
+    code: str = ""  # canonical cross-week product code (used for search overrides)
 
 
 @dataclass

@@ -4,6 +4,9 @@
 # User settings (auto-created on first run)
 settings.json
 
+# User-curated search-term overrides (copy from search_overrides.example.json)
+search_overrides.json
+
 # Output data (scrape results, audit logs, comparison CSVs)
 output/
 

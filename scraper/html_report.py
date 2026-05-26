@@ -414,6 +414,7 @@ def _build_report_data(
             "selected": u.id in {a.id for a in approved},
             "diff_pct": diff_pct,
             "search_term": search_terms.get(str(u.id), ""),
+            "search_term_overridden": u.search_term_overridden,
             "rrp_source": u.rrp_source,
         })
 
@@ -922,7 +923,7 @@ function esc(s) { var d = document.createElement('div'); d.textContent = s; retu
     tbody.innerHTML += '<tr>' +
       '<td>' + r.id + '</td>' +
       '<td>' + esc(r.name) + '</td>' +
-      '<td>' + esc(r.search_term) + '</td>' +
+      '<td>' + esc(r.search_term) + (r.search_term_overridden ? '<span class="badge-override" title="Search term overridden (forced via search_overrides.json)">⌕</span>' : '') + '</td>' +
       '<td class="text-right">' + fmt(r.our_price) + '</td>' +
       '<td class="text-right">' + fmt(r.new_rrp) + (r.rrp_source ? '<span class="badge-override" title="RRP overridden (' + r.rrp_source + ')">✎</span>' : '') + '</td>' +
       '<td class="text-right">' + fmt(r.old_rrp) + '</td>' +

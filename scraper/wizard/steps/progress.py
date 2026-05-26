@@ -24,8 +24,17 @@ from rich.progress import (
 )
 from rich.text import Text
 
+from rich.panel import Panel
+
 from scraper.db import OfferPart, fetch_items
 from scraper.utils.claude_cli import call_claude_cli
+from scraper.utils.overrides import (
+    MalformedOverridesError,
+    apply_search_overrides,
+    load_search_overrides,
+    resolve_search_overrides,
+)
+from scraper.wizard.components.menu import get_key
 from scraper.wizard.state import WizardState
 
 try:
@@ -480,6 +489,32 @@ def run_progress(state: WizardState, output_dir: Path) -> bool:
 
     run_id = f"pipeline_{state.offer_id}_{state.run_timestamp}"
 
+    # Resolve overrides up front so a malformed file can be confirmed/aborted *before* the
+    # live Progress region opens (a Y/n panel can't render inside it). Cached runs reuse the
+    # previous CSV's terms and don't consult overrides, so only load on a fresh run.
+    loaded_overrides = {}
+    if not state.use_cached_csv:
+        try:
+            loaded_overrides = load_search_overrides()
+        except MalformedOverridesError as e:
+            console.print(
+                Panel(
+                    "[bold]overrides.json is invalid or corrupt[/bold]\n\n"
+                    f"[dim]{e}[/dim]\n\n"
+                    "No search term overrides will be applied.\n"
+                    "Press [bold cyan]Y[/bold cyan] to continue without overrides, "
+                    "or [bold cyan]N[/bold cyan] to abort.",
+                    border_style="yellow",
+                )
+            )
+            while True:
+                key = get_key()
+                if key.lower() == "y":
+                    break
+                if key.lower() == "n" or key == "q":
+                    console.print("[dim]Aborted: fix overrides.json and re-run.[/dim]")
+                    return False
+
     with _redirect_logging_to_rich(console), Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -512,12 +547,22 @@ def run_progress(state: WizardState, output_dir: Path) -> bool:
                 "Generating search terms (LLM)...", total=None
             )
 
-            items_for_terms = [{"id": item.id, "name": item.name} for item in items]
+            # Resolve search-term overrides first so we don't spend tokens generating
+            # terms we're going to replace.
+            overrides = resolve_search_overrides(items, overrides=loaded_overrides)
+            items_for_terms = [
+                {"id": item.id, "name": item.name}
+                for item in items
+                if item.id not in overrides
+            ]
 
             search_terms, weights, per_qtys, failed_ids = generate_search_terms_with_weights(
                 items_for_terms,
                 batch_size=state.search_term_batch_size,
             )
+
+            # Merge overrides back in (term + optional manual weight).
+            apply_search_overrides(overrides, search_terms, weights)
 
             state.search_terms = search_terms
             state.search_term_weights = weights

@@ -71,6 +71,7 @@ scraper/
     ├── claude_cli.py    # Claude CLI wrapper
     ├── stealth.py       # Anti-detection (Bezier mouse)
     ├── matching.py      # Fuzzy matching, term extraction
+    ├── overrides.py     # Search-term overrides (code-prefix → search term)
     ├── oos_detection.py # OOS heuristics
     └── swot.py          # SWOT analysis builders
 ```
@@ -90,9 +91,44 @@ These files contain sensitive/proprietary configuration and are not committed to
 | `scraper/db_schema.py` | `db_schema.example.py` | SQL queries, column names, category IDs |
 | `scraper/prompts.py` | `prompts.example.py` | LLM prompt templates |
 | `scraper/thresholds.py` | `thresholds.example.py` | Business thresholds for pricing and SWOT |
+| `search_overrides.json` (project root) | `search_overrides.example.json` | Search-term overrides (optional) |
 | `.env` | `.env.example` | Database credentials |
 
-Copy each template and fill in your values. The app will show a helpful error if any are missing.
+Copy each template and fill in your values. The app will show a helpful error if any are
+missing — except `search_overrides.json`, which is optional (absent = no overrides).
+
+### Search-term overrides
+
+Some products are named so differently from the supermarket listings that the LLM-generated
+search term returns no results. `search_overrides.json` lets you force a known-good search
+term for specific products, keyed by the OfferPart **`code`**:
+
+```json
+{
+  "LetBC030": "Cos Hearts",
+  "TomTR250": { "search_term": "truss tomatoes", "our_weight_g": 250 }
+}
+```
+
+- **Key** = a `code` prefix. Matching is by prefix (`code LIKE 'key%'`), so an optional
+  week-specific code suffix (e.g. `LetBC030δ`) still matches the base key `LetBC030`.
+- **Value** = either a bare string (search term only) or an object
+  `{ "search_term": str, "our_weight_g": number }` to also supply a manual weight (use the
+  string form when no weight is needed).
+- Overrides are resolved **before** search-term generation; matched items are excluded from
+  the LLM batch (saving tokens). If a key matches more than one item's code, a warning is
+  logged and the first match (in fetch order — items are fetched `ORDER BY id`) is used.
+  Keys that match no item this run (typos / stale entries) are also warned about, not silently
+  ignored.
+- If `search_overrides.json` is present but **invalid or corrupt**, an interactive run prompts
+  to continue without overrides (`[Y/n]`); a non-interactive run (`--fully-automated` or no
+  TTY) aborts. An **absent** file is fine — overrides are optional.
+- Note: a freshly-added override only takes effect on a **fresh** wizard run, not when reusing
+  a cached CSV.
+- Overridden items are flagged in the results: a yellow `⌕` glyph before the name in the
+  approval TUI, and a hover badge on the Search Term cell in the HTML report. (On a cached-CSV
+  wizard run the items carry no `code`, so the marker doesn't show — matching the fresh-run-only
+  rule above.)
 
 ## Settings
 

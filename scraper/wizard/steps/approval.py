@@ -9,6 +9,7 @@ from typing import Literal
 from scraper.db import fetch_current_rrp
 from scraper.stores.store_config import STORE_A_COL, STORE_B_COL
 from scraper.tui import UpdateRow, show_approval_tui
+from scraper.utils.overrides import overridden_item_ids
 from scraper.wizard.settings import SettingsManager
 from scraper.wizard.state import WizardState
 
@@ -301,6 +302,10 @@ def run_approval(state: WizardState) -> bool:
 
     # Build update rows
     updates = build_updates(comparisons)
+    # Flag items whose search term was overridden (recompute quietly from search_overrides.json).
+    overridden = overridden_item_ids(state.items)
+    for u in updates:
+        u.search_term_overridden = u.id in overridden
     updates.sort(key=lambda u: u.name.lower())
     logger.info(f"Found {len(updates)} items with valid competitor prices")
 

@@ -32,6 +32,7 @@ try:
         COL_NAME,
         COL_PRICE,
         COL_CATEGORY,
+        COL_CODE,
         COL_OFFER,
         COL_RRP,
         COL_COUNT,
@@ -387,6 +388,7 @@ def fetch_items(offer_id: int, limit: int | None = None) -> list[OfferPart]:
                     name=row[COL_NAME],
                     price=row[COL_PRICE],
                     category_id=row[COL_CATEGORY],
+                    code=row.get(COL_CODE) or "",
                 ))
 
     logger.info(f"Fetched {len(items)} F&V items for offer_id={offer_id}")

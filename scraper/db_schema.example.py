@@ -6,10 +6,11 @@ Your database needs a table with at minimum:
 - Item ID, name, price, category, and an RRP field to update
 - An offer/batch grouping field
 - Soft-delete support (deleted_at column)
+- A stable product code (used for search overrides; see search_overrides.example.json)
 """
 
 FETCH_ITEMS = """
-    SELECT id, name, price, category_id
+    SELECT id, name, price, category_id, code
     FROM products
     WHERE batch_id = %s
       AND category_id IN (1, 2)
@@ -48,6 +49,7 @@ COL_ID = "id"
 COL_NAME = "name"
 COL_PRICE = "price"
 COL_CATEGORY = "category_id"
+COL_CODE = "code"  # stable product code, used for search overrides
 COL_OFFER = "batch_id"
 COL_RRP = "rrp"
 COL_COUNT = "cnt"

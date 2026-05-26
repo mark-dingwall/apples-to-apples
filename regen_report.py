@@ -61,6 +61,17 @@ comparisons = parse_comparison_csv(csv_path)
 updates = build_updates(comparisons)
 print(f"Items          : {len(updates)} total")
 
+# Flag overridden search terms (needs DB for item codes; gracefully skipped if unreachable).
+try:
+    from scraper.db import fetch_items
+    from scraper.utils.overrides import overridden_item_ids
+    _overridden = overridden_item_ids(fetch_items(OFFER_ID))
+    for u in updates:
+        u.search_term_overridden = u.id in _overridden
+    print(f"Overrides      : {len(_overridden)} item(s) flagged")
+except Exception as e:
+    print(f"Overrides      : marker skipped (no item codes: {e})")
+
 # Try to read actual user-selected items from the audit log
 audit_log_path = OUTPUT_DIR / f"pipeline_audit_{timestamp}.log"
 if audit_log_path.exists():
