@@ -11,8 +11,8 @@ from scraper import config
 logger = logging.getLogger(__name__)
 
 
-def get_random_user_agent() -> str:
-    """Select a random user agent from the configured pool."""
+def get_user_agent() -> str:
+    """Return the configured user agent (single engine-matched UA)."""
     return random.choice(config.USER_AGENTS)
 
 
@@ -62,7 +62,7 @@ async def create_stealth_browser(
     browser = await playwright.chromium.launch(**launch_kwargs)
 
     # Select random user agent for this session
-    user_agent = get_random_user_agent()
+    user_agent = get_user_agent()
     logger.debug(f"Using user agent: {user_agent[:50]}...")
 
     # Adjust viewport to match window bounds (account for browser chrome)
