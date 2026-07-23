@@ -1,7 +1,7 @@
 # Search Term Standardization — Design
 
 **Date:** 2026-07-22
-**Status:** Revised after multi-reviewer design review (rounds 1-2)
+**Status:** Revised after multi-reviewer design review (rounds 1-3)
 
 ## Problem
 
@@ -100,7 +100,7 @@ Records promotion candidates the operator explicitly declined, so they don't res
 week. Keyed the same way, one entry per declined (base_code, store, term):
 
 ```json
-{ "AAPL": { "coles": ["pink lady 157g apples"] } }
+{ "AAPL": { "coles": ["Pink Lady 157g apples"] } }
 ```
 
 A candidate whose (base_code, store, term) tuple appears here is excluded from future "New
@@ -173,10 +173,13 @@ store)`:
 - **"On file" includes this run, not just persisted state.** Two different products could
   collide onto the same brand-new `base_code` for the first time in the same run, in which case
   neither has anything persisted to check against yet. Seed an in-memory `(base_code, store) →
-  name` map at the start of each run from history/learned-term state, and update it as each item
-  is processed, so a same-run collision trips the same warn-and-skip path as a cross-run one
-  instead of silently mixing both products' observations into one run's history before the
-  mismatch would otherwise become visible next week.
+  name` map at the start of each run from whichever of the active learned-term entry or the most
+  recent history entry exists for that pair (the two should already agree, since both are kept
+  in sync by this same safeguard; the learned-term entry takes precedence in the unexpected case
+  they don't), and update the map as each item is processed, so a same-run collision trips the
+  same warn-and-skip path as a cross-run one instead of silently mixing both products'
+  observations into one run's history before the mismatch would otherwise become visible next
+  week.
 
 ## Pipeline changes
 
@@ -294,6 +297,15 @@ after Progress:
   simultaneously as its own separately-checkable "New promotion" row — so there's no scenario
   where approving one list silently contradicts a choice made on the other.
 - Only appears when there's at least one candidate or flag that week.
+- Reuses the existing approval screen's pagination (`page_size` setting) and adds bulk
+  approve-all-shown/decline-all-shown shortcuts (mirroring the A/N shortcuts on the approval
+  screen). This matters most for the **first live run after the one-time backfill**: since the
+  backfill only ever writes to `search_term_history.json` and never to
+  `learned_search_terms.json`, every (base_code, store) pair it seeded with 2+ good results has
+  no active term yet and will surface as a "New promotion" on that first run simultaneously —
+  plausibly the whole catalog × 2 stores at once. Steady-state weekly runs thereafter should
+  produce far fewer rows (most pairs will already have an active term), so this is a one-time
+  volume spike to design the screen around, not the normal case.
 
 ## One-time backfill script
 
@@ -354,6 +366,12 @@ _from_dict` (`wizard/settings.py:108-158`), which manually enumerates every fiel
 loading from JSON — adding only the dataclass field would mean a value set in `settings.json`
 is silently ignored and the default always wins.
 
+Changing this setting is **not retroactive**: already-promoted terms stay active regardless of
+the `good_count` they were promoted under (consistent with "no automatic removal without
+approval" — see Out of scope). The new threshold only applies to future candidate/replacement
+computation. `good_count` itself is frozen at approval time — it records how many good results
+justified the promotion, not a running tally of the term's ongoing performance.
+
 ## Error handling
 
 - `learned_search_terms.json` / `search_term_history.json` / `dismissed_search_terms.json`
@@ -408,3 +426,6 @@ is silently ignored and the default always wins.
 - Detecting/excluding historical `--dry-run`/`--limit` test runs during the one-time backfill
   (see "One-time backfill script" step 6) — mitigated by the review-screen approval gate rather
   than solved at the data layer.
+- Pruning/retention of `search_term_history.json`. Accepted: at this catalog's scale
+  (roughly 100-150 items × 2 stores per week), the file stays a few tens of MB even after a
+  decade of unpruned weekly runs — not a practical concern.
