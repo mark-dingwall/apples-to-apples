@@ -1,7 +1,7 @@
 # Search Term Standardization — Design
 
 **Date:** 2026-07-22
-**Status:** Revised after multi-reviewer design review (rounds 1-3)
+**Status:** Approved for planning — revised after multi-reviewer design review (rounds 1-4, converged)
 
 ## Problem
 
@@ -218,9 +218,12 @@ requires:
 - `deduplicate_for_scraping` and `_expand_deduplicated_results` are reworked to dedupe/expand
   keyed on `(term, store)` rather than `term` alone — the dedup savings still apply, just scoped
   per store instead of globally.
-- `ProcessorInputItem`/`ComparisonRow` (`processor.py:52-59, 84`) gain a per-store search-term
-  field (needed anyway, since the history-append step needs to know exactly which term was
-  searched at which store) instead of the current single `search_term`.
+- `ProcessorInputItem` (`processor.py:52-59`) has the current single `search_term` field and
+  gains per-store fields in its place. `ComparisonRow` (`processor.py:80-98`) has no
+  `search_term` field today at all (it's read off `ProcessorInputItem` to build the LLM prompt
+  batch — `processor.py:274` — but never flows into the output row); it simply gains new
+  per-store field(s) fresh, needed so the history-append step knows exactly which term was
+  searched at which store.
 - `scraper/oos_mode.py` is single-store already, so it only needs to look up the one relevant
   store's term — minimal impact.
 
@@ -375,9 +378,9 @@ justified the promotion, not a running tally of the term's ongoing performance.
 ## Error handling
 
 - `learned_search_terms.json` / `search_term_history.json` / `dismissed_search_terms.json`
-  malformed or unreadable: same pattern as `search_overrides.py`'s `MalformedOverridesError` —
-  interactive run prompts to continue without them (`[Y/n]`), non-interactive
-  (`--fully-automated` or no TTY) aborts.
+  malformed or unreadable: same pattern as `scraper/utils/overrides.py`'s
+  `MalformedOverridesError` — interactive run prompts to continue without them (`[Y/n]`),
+  non-interactive (`--fully-automated` or no TTY) aborts.
 - Missing `code` on an item: already handled by the existing override-resolution warning
   ("no items have a 'code' value"); this feature reuses that same guard and simply skips
   learned-term lookups for that run.
