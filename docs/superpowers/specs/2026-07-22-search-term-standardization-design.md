@@ -1,7 +1,7 @@
 # Search Term Standardization — Design
 
 **Date:** 2026-07-22
-**Status:** Revised after multi-reviewer design review (round 1)
+**Status:** Revised after multi-reviewer design review (rounds 1-2)
 
 ## Problem
 
@@ -100,16 +100,36 @@ Records promotion candidates the operator explicitly declined, so they don't res
 week. Keyed the same way, one entry per declined (base_code, store, term):
 
 ```json
-{ "AAPL": { "coles": ["Pink Lady 157g apples"] } }
+{ "AAPL": { "coles": ["pink lady 157g apples"] } }
 ```
 
 A candidate whose (base_code, store, term) tuple appears here is excluded from future "New
 promotions" lists, even though it still technically meets the good-result threshold. Declining a
-row on the review screen writes it here.
+row on the review screen writes it here. Dismissal is a one-way door by design (matching the
+manual-edit convention of `search_overrides.json`/`settings.json`): to un-dismiss a term, remove
+its entry directly from the file. A dismissed term is also excluded from decay-flag replacement
+suggestions (step 7) — since it was explicitly rejected, it shouldn't come back as "the"
+suggested fix when a different term later fails.
+
+### Term normalization
+Everywhere a search term is used as, or compared against, a dict/list key in this feature
+(history grouping, the active learned term, and the dismissed-terms list), compare on a
+normalized form — trimmed and case-folded — not the raw string. Two terms differing only in
+case or incidental whitespace (e.g. an LLM regenerating "Pink Lady Apples" as "pink lady apples ")
+must be treated as the same term for counting, promotion, and dismissal purposes, or good-count
+accumulation fragments silently and a dismissed term can trivially resurface. Store and display
+the original casing; normalize only for comparison/keying.
 
 ### Precedence
 `search_overrides.json` (manual, hand-typed) always wins over `learned_search_terms.json`
-(auto-learned) for the same product/store. The manual file is untouched by this feature.
+(auto-learned) for the same product/store. The manual file is untouched by this feature. While a
+manual override is active for an (item, store) pair, this feature does not log history
+observations for that pair at all (see Weekly flow step 5) — the override is a permanent human
+decision, not a candidate for the learned-term system, so there's nothing to track. This also
+avoids a subtler bug: if history logging continued regardless of source, a poor result produced
+by the *override's* term could be misattributed to the *learned* term's decay tracking (they can
+differ — the override shadows the learned term without erasing it), triggering a spurious decay
+flag for a term that was never actually searched that week.
 
 ### Base-code normalization
 For each run, compute the majority trailing-suffix character across all fetched items' `code`
@@ -142,14 +162,21 @@ Because `base_code` is a heuristic, two different products could in principle en
 (rare, but the override-matching code already treats the analogous "one code prefix matches
 multiple items" case as a real, expected occurrence — see `scraper/utils/overrides.py:169-179`).
 Before writing a new history observation or promoting/using a learned term for a `(base_code,
-store)`, compare the item's current `name` against the `name` already on file for that
-`(base_code, store)` (from the most recent history entry, or the active learned term):
+store)`, compare the item's current `name` against the name on file for that `(base_code,
+store)`:
 - **Match (or nothing on file yet):** proceed normally.
 - **Mismatch:** log a warning ("base_code {X} previously seen as {old_name}, now {new_name} —
   skipping history/learned-term use for this item this run") and treat this item as if it had no
   history for that `(base_code, store)` this run — i.e. don't append to its history, don't use
   its learned term, don't count it toward any candidate. This turns a silent, invisible merge
   into a visible, logged skip. It does not attempt to auto-resolve which product is "right."
+- **"On file" includes this run, not just persisted state.** Two different products could
+  collide onto the same brand-new `base_code` for the first time in the same run, in which case
+  neither has anything persisted to check against yet. Seed an in-memory `(base_code, store) →
+  name` map at the start of each run from history/learned-term state, and update it as each item
+  is processed, so a same-run collision trips the same warn-and-skip path as a cross-run one
+  instead of silently mixing both products' observations into one run's history before the
+  mismatch would otherwise become visible next week.
 
 ## Pipeline changes
 
@@ -214,10 +241,14 @@ calls, it only changes the dedup grouping, per the previous bullet.
    rejected for reasons unrelated to match correctness, e.g. a price outlier). This step runs
    right after Progress, independent of and before the Approval step.
 5. Append this run's `(base_code, store, term, quality, offer_id, date, name)` to
-   `search_term_history.json` — **except** when the run was invoked with `--dry-run` or
-   `--limit`. Both are explicitly non-representative preview/test runs (per CLAUDE.md), and
-   writing their observations into the production ledger would let a manual sanity-check
-   silently influence real promotion decisions.
+   `search_term_history.json` — **except**:
+   - When the run was invoked with `--dry-run` or `--limit`. Both are explicitly
+     non-representative preview/test runs (per CLAUDE.md), and writing their observations into
+     the production ledger would let a manual sanity-check silently influence real promotion
+     decisions.
+   - For an (item, store) pair currently resolved via a manual override (see Precedence above)
+     — nothing to log, since the learned-term system doesn't apply to that pair while the
+     override is active.
    - For each store, only log an observation (and only let it feed decay/promotion detection
      below) if that store's scrape actually completed (`StoreResults.status == "success"`).
      A `blocked`/`error`/`no_results` run produces `match_quality == "none"` for reasons that
@@ -268,20 +299,32 @@ after Progress:
 
 A standalone developer script (`scripts/backfill_search_term_history.py`, not part of the normal
 pipeline), safe to re-run (see `source: "backfill"` marker above):
-1. Parse every `pipeline_input_{offer}_{timestamp}.csv` (the **full**, non-deduplicated input
-   CSV — not `pipeline_input_dedup_*.csv`, which only contains one row per unique search term
-   and would silently skip every item that happened to share a term with another item) +
-   matching `pipeline_comparison_*.csv` pair in `output/`, building a history keyed by exact
-   `db_name` (as validated above).
-2. Query the database for current items (`code`, `name`), and compute each one's `base_code`
+1. Parse every full (non-deduplicated) input CSV in `output/`, matched with its corresponding
+   comparison CSV. There are **two filename conventions** in use, from the two pipeline entry
+   points, and both need to be handled — the interactive-wizard path writes
+   `pipeline_input_{offer}_{timestamp}.csv` / `pipeline_comparison_{offer}_{timestamp}.csv`; the
+   CLI-automation path (`scraper/pipeline.py`) writes `pipeline_input_{timestamp}.csv` /
+   `pipeline_comparison_{timestamp}.csv` with **no offer_id token at all**. Match each input CSV
+   to its comparison CSV by shared timestamp regardless of which convention it follows. Do
+   **not** read `pipeline_input_dedup_*.csv` — it only contains one row per unique search term
+   and would silently skip every item that happened to share a term with another item.
+2. Build the history keyed by exact `db_name`, but **only carry forward `"good"`-quality
+   observations** — skip `ok`/`poor`/`none` entirely. Reason: the historical comparison CSVs
+   have no scrape-status column (`StoreResults.status` — used by the live pipeline's decay
+   filter in step 5 above — is never written to `pipeline_comparison_*.csv`; it only exists in
+   the scraper's raw `results_*.json`), so a historical "poor"/"none" row can't be distinguished
+   from a transient block/error the way a live run's can. Backfilling only "good" results avoids
+   ever injecting a false decay signal, and matches the feature's actual use for backfilled data
+   (seeding promotion candidates) — historical poor/none rows wouldn't be used for anything else.
+3. Query the database for current items (`code`, `name`), and compute each one's `base_code`
    using the *exact same* suffix-normalization function used by the live pipeline (step 1 of the
    Weekly flow) — not a separate/ad-hoc implementation, to guarantee the backfilled keys and the
    live pipeline's future keys are computed identically.
-3. Build a name → base_code mapping from that current-items list. If a name maps to **more than
+4. Build a name → base_code mapping from that current-items list. If a name maps to **more than
    one** current product, log a warning and skip it (don't guess) — the same policy as the
-   no-match case in step 4, just a different reason for being unlinkable.
-4. For each historical name with exactly one current-product match, write its history into
-   `search_term_history.json` under that product's base_code, tagged `"source": "backfill"`.
+   no-match case below, just a different reason for being unlinkable.
+5. For each historical name with exactly one current-product match, write its (good-only) history
+   into `search_term_history.json` under that product's base_code, tagged `"source": "backfill"`.
    Names with no current match (e.g. discontinued products) or an ambiguous match are dropped,
    and the script logs a summary count of how many names were linked, dropped-no-match, and
    dropped-ambiguous, so nothing is silently lost.
@@ -289,7 +332,15 @@ pipeline), safe to re-run (see `source: "backfill"` marker above):
      `search_term_history.json` already has a *different* name on file for that base_code/store
      (e.g. from a prior backfill run against a since-changed DB), skip and warn rather than
      overwrite.
-5. Run once, manually, after the pipeline changes ship. Safe to re-run because entries are
+6. **Known accepted limitation:** the script has no way to detect or exclude past `--dry-run` /
+   `--limit` test runs sitting in `output/` — nothing in the filenames or CSV contents marks a
+   historical run as a test run. Unlike the live pipeline (which excludes these automatically
+   every week), this is a one-time, manually-triggered script, so the mitigation is manual: spot
+   check `output/` for obviously-small/test runs before running the backfill. The residual risk
+   is low even if missed — a stray "good" result only ever contributes one data point toward the
+   2-result promotion threshold, and every resulting candidate still goes through the same
+   operator review/approval screen as any other promotion before anything is adopted.
+7. Run once, manually, after the pipeline changes ship. Safe to re-run because entries are
    tagged with `source: "backfill"` — a re-run can replace only its own previously-written
    entries for a given base_code/store rather than appending duplicates that would inflate
    `good_count`.
@@ -321,7 +372,13 @@ is silently ignored and the default always wins.
   majority, an exact tie (must NOT strip), a single-item run (no majority), and an item whose
   stripped result would be empty (must not strip).
 - Unit test for the name-shadow safeguard: same base_code, differing name → skip + warn, not a
-  silent merge.
+  silent merge — including the intra-run case (two different products colliding onto the same
+  new base_code within a single run, not just across runs).
+- Unit test confirming an (item, store) pair under an active manual override produces no history
+  observation at all, and that a poor override result never triggers a decay flag for the
+  shadowed learned term.
+- Unit test for term normalization: two terms differing only in case/whitespace are treated as
+  the same key for history accumulation, promotion, and dismissal matching.
 - Unit tests for promotion-candidate selection: threshold, multi-candidate tie-break including
   the full three-level tiebreak (good_count → most-recent-date → alphabetical), and the rule
   that a pair with an active term never produces a standalone "New promotion" row.
@@ -329,8 +386,9 @@ is silently ignored and the default always wins.
   as a decay signal, only a completed scrape with poor/none quality does.
 - Unit test asserting override → learned-term → LLM precedence order end-to-end.
 - Unit test for the backfill script against a small fixture subset of real output files,
-  asserting linked/dropped-no-match/dropped-ambiguous counts, and that running it twice is a
-  no-op on the resulting history (idempotency).
+  asserting linked/dropped-no-match/dropped-ambiguous counts, that running it twice is a no-op
+  on the resulting history (idempotency), that it correctly pairs both filename conventions
+  (with and without an offer_id token), and that only `"good"`-quality rows are carried forward.
 - Manual end-to-end wizard run with a seeded `learned_search_terms.json` to confirm: the review
   screen appears only when there's something to review, approving a promotion persists it, a
   promoted term is actually used (bypassing LLM generation) on the next run, and `--dry-run` /
@@ -343,3 +401,10 @@ is silently ignored and the default always wins.
 - Recovering history for products no longer in the current database.
 - Fully eliminating base_code fragmentation from the suffix-stripping heuristic (accepted
   limitation, see "Base-code normalization").
+- Surfacing a strictly-better alternate term while the active term is still passing (not
+  failing). Decay flags only fire when the active term itself starts failing, so a
+  higher-`good_count` alternate sitting in history stays invisible until that happens — this is
+  a visibility gap, not a request to auto-switch, and is accepted rather than solved here.
+- Detecting/excluding historical `--dry-run`/`--limit` test runs during the one-time backfill
+  (see "One-time backfill script" step 6) — mitigated by the review-screen approval gate rather
+  than solved at the data layer.
