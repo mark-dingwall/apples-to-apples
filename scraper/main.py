@@ -86,6 +86,12 @@ async def scrape_store(
             )
             if on_item_done:
                 on_item_done()
+        if items and not any(result.status == "success" for result in results.values()):
+            logger.warning(
+                "[%s] No successful searches across %s items; check selectors, "
+                "page loading, or blocking before using this run for pricing.",
+                scraper.name, len(items),
+            )
     finally:
         await scraper.close_page()
 

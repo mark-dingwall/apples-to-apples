@@ -3,6 +3,7 @@
 import csv
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -282,12 +283,15 @@ def run_scraper_subprocess(
 
     logger.info(f"Running scraper: {' '.join(cmd)}")
 
+    stderr_file = None
     try:
-        stderr_file = tempfile.TemporaryFile(mode="w+")
+        log_path = output_dir / f"scraper_{run_id}.log"
+        stderr_file = log_path.open("w+", encoding="utf-8", errors="replace")
         process = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
+            stdout=stderr_file,
             stderr=stderr_file,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
 
         last_completed = 0
@@ -298,6 +302,7 @@ def run_scraper_subprocess(
             if time.time() - start_time > timeout:
                 logger.error("Scraper timed out")
                 process.kill()
+                process.wait()
                 stderr_file.close()
                 return None
 
@@ -323,16 +328,25 @@ def run_scraper_subprocess(
         except Exception:
             pass
 
+        stderr_file.seek(0)
+        stderr_content = stderr_file.read().strip()
+        stderr_file.close()
+
         if process.returncode != 0:
-            stderr_file.seek(0)
-            stderr_content = stderr_file.read().strip()
-            stderr_file.close()
             if stderr_content:
                 logger.error(f"Scraper stderr:\n{stderr_content}")
             logger.error(f"Scraper failed with code {process.returncode}")
             return None
 
-        stderr_file.close()
+        warnings = [line for line in stderr_content.splitlines()
+                    if " - WARNING - " in line or " - ERROR - " in line]
+        if warnings:
+            logger.warning(
+                "Scraper reported %s warnings/errors. Full log: %s\n%s",
+                len(warnings), log_path, "\n".join(warnings[:5]),
+            )
+        else:
+            logger.info(f"Scraper log: {log_path}")
 
         # Find the output file
         results_file = output_dir / f"results_{run_id}.json"
@@ -349,6 +363,9 @@ def run_scraper_subprocess(
     except Exception as e:
         logger.error(f"Scraper failed: {e}")
         return None
+    finally:
+        if stderr_file is not None:
+            stderr_file.close()
 
 
 def run_processor_subprocess(

@@ -88,8 +88,40 @@ After running, check the `output` folder:
 | `comparison.csv` | Spreadsheet comparing all prices |
 | `report_*.html` | HTML summary report with SWOT analysis |
 | `pipeline_audit_*.log` | Record of any database updates |
+| `scraper_*.log` | Full scraper output from wizard runs, including warnings |
 
 When using the wizard or pipeline, you'll also see an **approval screen** where you can review each price comparison, select which items to update, and confirm before any database changes are made. Use `--dry-run` to preview without modifying the database.
+
+### Browser and dependency updates
+
+After upgrading dependencies, install their matching Chromium build:
+
+```powershell
+python -m pip install --upgrade -r requirements.txt
+python -m playwright install chromium
+python -m pip check
+```
+
+The user agent is read from the running Chromium build automatically. There is
+no Chrome version string to update by hand. The stealth package used here is
+`playwright-stealth`.
+
+Store B supports both current product cards and legacy shadow DOM cards. For an
+existing installation, copy the updated `STORE_B` product selectors from
+`scraper/stores/store_config.example.py` into your gitignored `store_config.py`,
+keeping your store URLs and target-specific empty-results selector. Selectors
+scope product cards to search results and exclude recommendations. Selector
+timeouts are retried and recorded as errors; explicit empty searches remain
+`no_results`. Wizard runs show a warning summary and retain the full scraper log,
+even when the scraper exits successfully.
+
+After configuring the project, run the offline regression tests with:
+
+```powershell
+python -m unittest discover -v
+```
+
+These tests use local HTML in Chromium and do not access stores or the database.
 
 The `comparison.csv` file has columns showing:
 - Our price vs Store A price vs Store B price

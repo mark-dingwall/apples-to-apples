@@ -11,9 +11,9 @@ from scraper import config
 logger = logging.getLogger(__name__)
 
 
-def get_user_agent() -> str:
-    """Return the configured user agent (single engine-matched UA)."""
-    return random.choice(config.USER_AGENTS)
+def get_user_agent(native_user_agent: str) -> str:
+    """Keep the running engine/platform's UA, without the headless token."""
+    return native_user_agent.replace("HeadlessChrome/", "Chrome/")
 
 
 async def create_stealth_browser(
@@ -61,9 +61,14 @@ async def create_stealth_browser(
 
     browser = await playwright.chromium.launch(**launch_kwargs)
 
-    # Select random user agent for this session
-    user_agent = get_user_agent()
-    logger.debug(f"Using user agent: {user_agent[:50]}...")
+    # Read the native UA rather than hard-coding a version that drifts after
+    # Playwright upgrades. Preserve the engine's platform and reduced version.
+    probe = await browser.new_page()
+    try:
+        user_agent = get_user_agent(await probe.evaluate("navigator.userAgent"))
+    finally:
+        await probe.close()
+    logger.info(f"Chromium {browser.version}; user agent: {user_agent}")
 
     # Adjust viewport to match window bounds (account for browser chrome)
     vp_width = config.VIEWPORT_WIDTH
@@ -85,7 +90,17 @@ async def create_stealth_browser(
 
 async def apply_stealth(page: Page) -> None:
     """Apply stealth settings to a page."""
-    await Stealth().apply_stealth_async(page)
+    # Preserve the context locale and Chromium's native platform/client hints.
+    # The context already supplies an engine-matched UA.
+    await Stealth(
+        navigator_languages=False,
+        navigator_languages_override=None,
+        navigator_platform=False,
+        navigator_platform_override=None,
+        navigator_user_agent=False,
+        navigator_user_agent_data=False,
+        sec_ch_ua=False,
+    ).apply_stealth_async(page)
 
 
 async def random_delay(min_seconds: float | None = None, max_seconds: float | None = None) -> None:

@@ -45,18 +45,20 @@ STORE_B = {
     "locale": "en-US",
     "timezone": "America/New_York",
     "selectors": {
-        "product_tile": ".product-tile",
-        "product_name": ".product-name a",
-        "product_price": ".price .primary",
-        "product_link": ".product-name a",
-        "product_unit_price": ".price-per-unit",
+        # Scope to search results, excluding recommendations and nested actions.
+        # Match CSS module prefixes, never the build-specific hash suffix.
+        "product_tile": "[data-testid='search-results-product'] [class*='product-tile_component_product-tile__']",
+        "product_name": "[class*='product-tile-name_product-tile-name__'] a, div.title a",
+        "product_price": "[class*='product-tile-price-info_lead-price__'], div.product-tile-price .primary",
+        "product_link": "[class*='product-tile-name_product-tile-name__'] a, div.title a",
+        "product_unit_price": "[class*='product-tile-price-info_cup-price__'], span.price-per-cup",
         "special_badge": ".was-price",
         "unavailable": ".unavailable-tag",
-        "product_image": ".product-image img",
-        "product_image_link": ".product-image a",
+        "product_image": "[class*='product-tile-image_image__'] img, div.product-tile-image img",
+        "product_image_link": "[class*='product-tile-image_image__'] a, div.product-tile-image a",
         "no_results": ".zero-results",
     },
-    "uses_shadow_dom": True,
+    "uses_shadow_dom": False,
     "url_pattern": {
         "product_id_regex": r"/product/(\d+)/",
         "product_url_prefix": "https://store-b.example.com",

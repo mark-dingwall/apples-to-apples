@@ -32,26 +32,20 @@ class StoreBScraper(BaseStoreScraper):
         return STORE_CONFIG["search_url"].format(query=quote_plus(query))
 
     async def wait_for_results(self) -> bool:
-        """Wait for product tiles to load (including shadow DOM content)."""
+        """Return False only for an explicit, visible empty-results message."""
         sel = STORE_CONFIG["selectors"]
         try:
+            no_results = self.page.locator(sel["no_results"]).filter(visible=True)
+            tiles = self.page.locator(sel["product_tile"]).filter(visible=True)
             # Wait for either no-results message OR product tiles to appear
-            await self.page.wait_for_selector(
-                f"{sel['no_results']}, {sel['product_tile']}",
-                timeout=config.SELECTOR_TIMEOUT
-            )
+            await no_results.or_(tiles).first.wait_for(timeout=config.SELECTOR_TIMEOUT)
 
-            # Now check which one appeared - no-results takes priority
-            no_results_el = await self.page.query_selector(sel["no_results"])
-            if no_results_el:
+            if await no_results.count():
                 return False
 
-            # Wait for shadow DOM content to render (price indicates fully loaded)
-            # The >> operator pierces shadow DOM boundaries
-            await self.page.wait_for_selector(
-                f"{sel['product_tile']} >> {sel['product_price']}",
-                timeout=config.SELECTOR_TIMEOUT
-            )
+            # Price readiness also covers legacy cards that render in shadow DOM.
+            await tiles.locator(sel["product_price"]).filter(visible=True).first.wait_for(
+                timeout=config.SELECTOR_TIMEOUT)
             return True
         except PlaywrightTimeout:
             logger.warning(f"[{self.name}] Timeout waiting for product tiles")
@@ -59,19 +53,15 @@ class StoreBScraper(BaseStoreScraper):
             blocked = await self.page.query_selector("text=Access Denied")
             if blocked:
                 raise BlockedError(self.name, "Access Denied page detected")
-            return False
-        except Exception as e:
-            logger.warning(f"[{self.name}] Error waiting for results: {e}")
-            # Check if blocked
-            blocked = await self.page.query_selector("text=Access Denied")
-            if blocked:
-                raise BlockedError(self.name, "Access Denied page detected")
-            return False
+            # Let BaseStoreScraper retry and record an error, rather than
+            # silently turning changed selectors or slow loading into no_results.
+            raise
 
     async def parse_results(self, search_term: str) -> tuple[list[SearchResult], int]:
-        """Parse product tiles from Store B search results (with shadow DOM)."""
+        """Parse configured product cards (including legacy shadow DOM cards)."""
         results = []
         skipped_no_price = 0
+        parse_errors = 0
         sel = STORE_CONFIG["selectors"]
         url_pattern = STORE_CONFIG["url_pattern"]
 
@@ -94,6 +84,8 @@ class StoreBScraper(BaseStoreScraper):
                 if price_count > 0:
                     price_text = await price_locator.first.text_content()
                     price = self._clean_price(price_text) if price_text else ""
+                    if price_text and price_text.strip() and not price:
+                        raise ValueError(f"Unrecognised price text: {price_text!r}")
 
                 if not price or "$" not in price:
                     skipped_no_price += 1
@@ -105,6 +97,8 @@ class StoreBScraper(BaseStoreScraper):
                 # Product name - Playwright locator API auto-pierces shadow DOM
                 name_locator = tile.locator(sel["product_name"])
                 name = await name_locator.first.text_content() if await name_locator.count() > 0 else ""
+                if not name or not name.strip():
+                    raise ValueError("Missing product name; check product_name selector")
 
                 # Unit price
                 unit_price_locator = tile.locator(sel["product_unit_price"])
@@ -177,23 +171,25 @@ class StoreBScraper(BaseStoreScraper):
                 ))
 
             except PlaywrightTimeout as e:
+                parse_errors += 1
                 logger.warning(f"[{self.name}] Timeout parsing tile {len(results) + 1}: {e}")
                 continue
             except Exception as e:
+                parse_errors += 1
                 logger.warning(f"[{self.name}] Error parsing tile {len(results) + 1}: {e}")
                 continue
 
         if skipped_no_price > 0:
             logger.info(f"[{self.name}] Skipped {skipped_no_price} tiles without prices")
 
+        if not results and parse_errors:
+            raise RuntimeError(
+                f"Could not extract products from {parse_errors} cards; check product selectors"
+            )
+
         return results, skipped_no_price
 
     def _clean_price(self, price: str) -> str:
-        """Clean up price text."""
-        price = price.strip()
-        lines = price.split("\n")
-        for line in lines:
-            line = line.strip()
-            if "$" in line and any(c.isdigit() for c in line):
-                return line
-        return price
+        """Join split currency/amount nodes and take the first displayed price."""
+        match = re.search(r"\$\s*(\d+(?:,\d{3})*(?:\.\d{1,2})?)", price)
+        return "$" + match.group(1).replace(",", "") if match else ""
